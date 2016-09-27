@@ -77,25 +77,25 @@ EXCEPTION POLICY
 
 # Though it would be slightly more efficient to use single characters, it's a text protocol
 # after all, so we will use words for readability.
-STATE_NOT_READY = "not_ready"
-STATE_AWAITING_CODE = "awaiting_code"
-STATE_SYNTHESIZING = "synthesizing"
-STATE_SYNTHESIZING_ERROR = "synthesizing_error"
-STATE_PROGRAMMING = "programming"
-STATE_READY = "ready"
-STATE_FAILED = "failed"
-STATE_NOT_ALLOWED = "not_allowed"
-STATE_USE_TIME_EXCEEDED = "user_time_exceeded"  # When the user has been using the experiment for too long.
+STATE_NOT_READY = 'not_ready'
+STATE_AWAITING_CODE = 'awaiting_code'
+STATE_SYNTHESIZING = 'synthesizing'
+STATE_SYNTHESIZING_ERROR = 'synthesizing_error'
+STATE_PROGRAMMING = 'programming'
+STATE_READY = 'ready'
+STATE_FAILED = 'failed'
+STATE_NOT_ALLOWED = 'not_allowed'
+STATE_USE_TIME_EXCEEDED = 'user_time_exceeded'  # When the user has been using the experiment for too long.
 
 # Names for the configuration variables.
-CFG_XILINX_VHD_ALLOWED = "xilinx_vhd_allowed"
-CFG_XILINX_BIT_ALLOWED = "xilinx_bit_allowed"
+CFG_XILINX_VHD_ALLOWED = 'xilinx_vhd_allowed'
+CFG_XILINX_BIT_ALLOWED = 'xilinx_bit_allowed'
 
 # A timer will start after synthesization and programming finishes. If this max_use_time is exceeded, then
 # the user will soon be kicked out of the experiment. This timeout is internally enforced. It will kick
 # the user out, regardless of the time_allowed permission time he has left.
 # If zero, no limit will be enforced.
-CFG_XILINX_MAX_USE_TIME = "xilinx_max_use_time"
+CFG_XILINX_MAX_USE_TIME = 'xilinx_max_use_time'
 
 # For now, only 'FPGA' will be supported.
 CFG_HARDWARE_BOARD_TYPE = 'hardware_board_type'
@@ -103,8 +103,9 @@ CFG_HARDWARE_BOARD_TYPE = 'hardware_board_type'
 # URL of the device server, to which we will forward the commands to control the device (i.e. switchon 1)
 CFG_DEVICE_SERVER_URL = 'device_server_url'
 
-CFG_DEBUG_FLAG = "debug"
-CFG_FAKE_FLAG = "fake"
+CFG_DEBUG_FLAG = 'debug'
+CFG_FAKE_FLAG = 'fake'
+CFG_FAKE_LEDS_FLAG = 'fake_leds'
 
 DEBUG = False  # Can be overriden by the config.
 
@@ -169,19 +170,6 @@ class HWBExperiment(Experiment.Experiment):
         self._last_virtualworld_update = time.time()
         self._watertank = None
         self._watertank_time_without_demand_change = 0
-
-    def _load_programmer(self, programmer_type, board_type):
-        """
-        Loads the Programmer that will handle the actual programming of the logic into the Board.
-        :param programmer_type: The type of programmer (for instance, DigilentAdapt, or XilinxImpact)
-        :param board_type: The type of Xilinx board (for instance, FPGA or PLD)
-        :return:
-        """
-        return XilinxProgrammer.create(programmer_type, self._cfg_manager, board_type)
-
-    def _load_command_sender(self):
-        device_name = self._cfg_manager.get_value('xilinx_device_to_send_commands')
-        return UdXilinxCommandSender.create(device_name, self._cfg_manager)
 
     def _load_webcam_url(self):
         cfg_webcam_url = "%s_webcam_url" % self._board_type.lower()
@@ -349,6 +337,7 @@ class HWBExperiment(Experiment.Experiment):
                         df.write(file_content_recovered)
                 finally:
                     os.close(fd)
+
                 self._programmer.program(file_name)
             finally:
                 os.remove(file_name)
@@ -591,7 +580,7 @@ class HWBExperiment(Experiment.Experiment):
             if self._switches_reversed:
                 if command.startswith("ChangeSwitch"):
                     command = command.replace(command[-1], str(9 - int(command[-1])))
-            self._command_sender.send_command(command)
+            self.send_device_server_command(command)
         except Exception as e:
             if DEBUG:
                 traceback.print_exc(e)
