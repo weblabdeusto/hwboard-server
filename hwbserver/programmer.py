@@ -45,7 +45,6 @@ class Programmer(object):
         self._thread_active = False
         self._success_callback = None
         self._error_callback = None
-        pass
 
     def is_programming(self):
         """
