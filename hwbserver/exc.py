@@ -14,6 +14,33 @@
 #
 import weblab.experiment.exc as ExperimentErrors
 
+
+
+# New exceptions (updated for the 2016 version of the experiment server)
+
+class ConfigurationError(ExperimentErrors.ExperimentError):
+    """
+    To be raised when an important configuration variable is missing or is improperly configured.
+    """
+    def __init__(self,*args,**kwargs):
+        ExperimentErrors.ExperimentError.__init__(self,*args,**kwargs)
+
+class DeviceServerError(ExperimentErrors.ExperimentError):
+    """
+    To be raised when there is any kind of device-server related error (such as no connection to the device server).
+    """
+    def __init__(self,*args,**kwargs):
+        ExperimentErrors.ExperimentError.__init__(self,*args,**kwargs)
+
+class UnhandledExceptionError(ExperimentErrors.ExperimentError):
+    """
+    To be raised when an exception that we do NOT expect is raised.
+    """
+    def __init__(self,*args,**kwargs):
+        ExperimentErrors.ExperimentError.__init__(self,*args,**kwargs)
+
+# Old exceptions (may be used or not)
+
 class UdXilinxExperimentError(ExperimentErrors.ExperimentError):
     def __init__(self,*args,**kargs):
         ExperimentErrors.ExperimentError.__init__(self,*args,**kargs)

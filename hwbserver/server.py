@@ -24,6 +24,7 @@ import time
 import random
 import traceback
 
+import requests
 from voodoo.gen.caller_checker import caller_check
 from voodoo.log import logged
 from voodoo.override import Override
@@ -37,6 +38,8 @@ import weblab.experiment.util as ExperimentUtil
 from experiments.xilinxc.compiler import Compiler
 import watertank_simulation
 from voodoo.threaded import threaded
+
+from exc import DeviceServerError
 
 """
 Notes on the LEDS & SWITCHES
@@ -57,6 +60,16 @@ Notes on the HARDWARE (Dec 2015)
   Sometimes the device server does not output what the experiment server expects. That's
   it, sometimes the expServer._switches_state does not reflect the real switches state.
   Thus, to really Clean we specifically set the switches to 0 on occasion.
+
+
+
+
+EXCEPTION POLICY
+
+ - When the experiment is not configured properly (important configuration variables are missing) an
+   ExperimentConfigurationError exception will be thrown.
+
+
 """
 
 
@@ -75,8 +88,6 @@ STATE_NOT_ALLOWED = "not_allowed"
 STATE_USE_TIME_EXCEEDED = "user_time_exceeded"  # When the user has been using the experiment for too long.
 
 # Names for the configuration variables.
-CFG_XILINX_COMPILING_FILES_PATH = "xilinx_compiling_files_path"
-CFG_XILINX_COMPILING_TOOLS_PATH = "xilinx_compiling_tools_path"
 CFG_XILINX_VHD_ALLOWED = "xilinx_vhd_allowed"
 CFG_XILINX_BIT_ALLOWED = "xilinx_bit_allowed"
 
@@ -86,15 +97,19 @@ CFG_XILINX_BIT_ALLOWED = "xilinx_bit_allowed"
 # If zero, no limit will be enforced.
 CFG_XILINX_MAX_USE_TIME = "xilinx_max_use_time"
 
+# For now, only 'FPGA' will be supported.
+CFG_HARDWARE_BOARD_TYPE = 'hardware_board_type'
+
+# URL of the device server, to which we will forward the commands to control the device (i.e. switchon 1)
+CFG_DEVICE_SERVER_URL = 'device_server_url'
+
 CFG_DEBUG_FLAG = "debug"
 CFG_FAKE_FLAG = "fake"
-CFG_FAKE_LEDS_FLAG = "fake_leds" # Subset of FAKE_FLAG.
 
 DEBUG = False  # Can be overriden by the config.
 
 
-# TODO: which exceptions should the user see and which ones should not?
-class UdXilinxExperiment(Experiment.Experiment):
+class HWBExperiment(Experiment.Experiment):
     @Override(Experiment.Experiment)
     @caller_check(ServerType.Laboratory)
     @logged("info")
@@ -102,17 +117,12 @@ class UdXilinxExperiment(Experiment.Experiment):
         return "2"
 
     def __init__(self, coord_address, locator, cfg_manager, *args, **kwargs):
-        super(UdXilinxExperiment, self).__init__(*args, **kwargs)
+        super(HWBExperiment, self).__init__(*args, **kwargs)
         self._coord_address = coord_address
         self._locator = locator
         self._cfg_manager = cfg_manager
 
-        # Board & Programming related attributes
-        self._board_type = self._cfg_manager.get_value('xilinx_board_type', "")  # Read the board type: IE: FPGA
-        self._programmer_type = self._cfg_manager.get_value('xilinx_programmer_type',
-                                                            "")  # Read the programmer type: IE: DigilentAdapt
-        self._programmer = self._load_programmer(self._programmer_type, self._board_type)
-        self._command_sender = self._load_command_sender()
+        self._board_type = self._cfg_manager.get_value(CFG_HARDWARE_BOARD_TYPE, "")  # Read the board type: IE: FPGA
 
         # Debugging and testing related attributes
         global DEBUG
@@ -121,6 +131,8 @@ class UdXilinxExperiment(Experiment.Experiment):
         self._fake_leds = self._cfg_manager.get_value(CFG_FAKE_LEDS_FLAG, False)
 
         self.webcam_url = self._load_webcam_url()
+
+        self._device_server_url = self._cfg_manager.get_value(CFG_DEVICE_SERVER_URL, False)
 
         self._programming_thread = None
         self._current_state = STATE_NOT_READY
@@ -134,8 +146,6 @@ class UdXilinxExperiment(Experiment.Experiment):
         # servers don't break if they aren't updated ot include this setting.
         self._leds_service_url = self._cfg_manager.get_value('leds_service_url', "http://192.168.0.73/values.json")
 
-        self._compiling_files_path = self._cfg_manager.get_value(CFG_XILINX_COMPILING_FILES_PATH, "")
-        self._compiling_tools_path = self._cfg_manager.get_value(CFG_XILINX_COMPILING_TOOLS_PATH, "")
         self._synthesizing_result = ""
 
         self._vhd_allowed = self._cfg_manager.get_value(CFG_XILINX_VHD_ALLOWED, True)
@@ -307,8 +317,8 @@ class UdXilinxExperiment(Experiment.Experiment):
             # Note: Currently, running the fake xilinx will raise this exception when
             # trying to do a CleanInputs, for which apparently serial is needed.
             self._current_state = STATE_FAILED
-            log.log(UdXilinxExperiment, log.level.Warning, "Error programming file: " + str(e))
-            log.log_exc(UdXilinxExperiment, log.level.Warning)
+            log.log(HWBExperiment, log.level.Warning, "Error programming file: " + str(e))
+            log.log_exc(HWBExperiment, log.level.Warning)
 
     def _program_file(self, file_content):
         try:
@@ -352,16 +362,16 @@ class UdXilinxExperiment(Experiment.Experiment):
                 print "FULL EXCEPTION IS: {0}".format(tb)
 
             # TODO: test me
-            log.log(UdXilinxExperiment, log.level.Info,
+            log.log(HWBExperiment, log.level.Info,
                     "Exception joining sending program to device: %s" % e.args[0])
-            log.log_exc(UdXilinxExperiment, log.level.Debug)
+            log.log_exc(HWBExperiment, log.level.Debug)
             raise ExperimentErrors.SendingFileFailureError("Error sending file to device: %s" % e)
 
         self._clear()
 
     def _clear(self):
         try:
-            self._command_sender.send_command("CleanInputs")
+            self.send_device_server_command("CleanInputs")
             self._switches_state = [0] * 10
 
             for i in range(5):
@@ -437,10 +447,10 @@ class UdXilinxExperiment(Experiment.Experiment):
         """
         if on:
             if self._switches_state[9 - switch] == "0" or force_update:
-                self._command_sender.send_command("ChangeSwitch %s %d" % ("on", 9 - switch))
+                self.send_device_server_command("ChangeSwitch %s %d" % ("on", 9 - switch))
         else:
             if self._switches_state[9 - switch] == "1" or force_update:
-                self._command_sender.send_command("ChangeSwitch %s %d" % ("off", 9 - switch))
+                self.send_device_server_command("ChangeSwitch %s %d" % ("off", 9 - switch))
 
         if on:
             self._switches_state[9 - switch] = "1"
@@ -589,6 +599,17 @@ class UdXilinxExperiment(Experiment.Experiment):
                 "Error sending command to device: %s" % e
             )
 
+    def send_device_server_command(self, command):
+        """
+        Sends a command to the device server.
+        :param command: The command to send as a string. (Example: ChangeSwitch 2 on)
+        :return:
+        """
+        try:
+            r = requests.post(self._device_server_url, data=command)
+        except requests.exceptions.RequestException as rex:
+            raise DeviceServerError("Could not send command to the device server", rex)
+
     def query_leds_from_json(self):
         """
         The server reports the LEDs from left to right (leftmost LED being 0, topmost being 9)
@@ -645,7 +666,7 @@ if __name__ == "__main__":
     except:
         cfg_manager.append_path("../launch/sample/main_machine/main_instance/experiment_fpga/server_config.py")
 
-    experiment = UdXilinxExperiment(None, None, cfg_manager)
+    experiment = HWBExperiment(None, None, cfg_manager)
 
     lab_session_id = SessionId('my-session-id')
     experiment.do_start_experiment()
