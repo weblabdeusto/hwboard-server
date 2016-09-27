@@ -78,18 +78,22 @@ EXCEPTION POLICY
 # Though it would be slightly more efficient to use single characters, it's a text protocol
 # after all, so we will use words for readability.
 STATE_NOT_READY = 'not_ready'
-STATE_AWAITING_CODE = 'awaiting_code'
-STATE_SYNTHESIZING = 'synthesizing'
-STATE_SYNTHESIZING_ERROR = 'synthesizing_error'
 STATE_PROGRAMMING = 'programming'
 STATE_READY = 'ready'
 STATE_FAILED = 'failed'
 STATE_NOT_ALLOWED = 'not_allowed'
 STATE_USE_TIME_EXCEEDED = 'user_time_exceeded'  # When the user has been using the experiment for too long.
 
-# Names for the configuration variables.
-CFG_XILINX_VHD_ALLOWED = 'xilinx_vhd_allowed'
-CFG_XILINX_BIT_ALLOWED = 'xilinx_bit_allowed'
+
+# CFG_* are the configuration variables.
+
+# If compilator_result_allowed is set to true, the command to feed the program through an id that identifies
+# the compilator result will be allowed.
+CFG_COMPILATOR_RESULT_ALLOWED = 'compilator_result_allowed'
+
+# If bit_file_allowed is set to true, then the experiment will accept send_file requests with the raw program
+# to program.
+CFG_BIT_FILE_ALLOWED = 'bit_file_allowed'
 
 # A timer will start after synthesization and programming finishes. If this max_use_time is exceeded, then
 # the user will soon be kicked out of the experiment. This timeout is internally enforced. It will kick
@@ -149,8 +153,8 @@ class HWBExperiment(Experiment.Experiment):
 
         self._synthesizing_result = ""
 
-        self._vhd_allowed = self._cfg_manager.get_value(CFG_XILINX_VHD_ALLOWED, True)
-        self._bit_allowed = self._cfg_manager.get_value(CFG_XILINX_BIT_ALLOWED, True)
+        self._compilator_result_allowed = self._cfg_manager.get_value(CFG_COMPILATOR_RESULT_ALLOWED, True)
+        self._bit_file_allowed = self._cfg_manager.get_value(CFG_BIT_FILE_ALLOWED, True)
 
         self._ucf_file = None
 
@@ -277,86 +281,6 @@ class HWBExperiment(Experiment.Experiment):
             if DEBUG: print "[DBG]: Target file retrieved after successful compile. Now programming."
             c._compiling_result = "Synthesizing done."
             self._program_file_t(targetfile)
-
-    @threaded()
-    @logged("info", except_for='file_content')
-    def _program_file_t(self, file_content):
-        """
-        Running in its own thread, this method will program the board
-        while updating the state of the experiment appropriately.
-        """
-        try:
-            start_time = time.time()  # To track the time it takes
-            self._current_state = STATE_PROGRAMMING
-            self._program_file(file_content)
-            self._current_state = STATE_READY
-            elapsed = time.time() - start_time  # Calculate the time the programming process took
-
-            # Remember when real usage starts, so that we can enforce use-time specific limits.
-            self._use_time_start = time.time()
-            if DEBUG:
-                print "[DBG]: STATE became STATE_READY. UseTimeStart = %s." % self._use_time_start
-
-            # If we are in adaptive mode, change the programming time appropriately.
-            # TODO: Consider limiting the variation range to dampen anomalies.
-            if self._adaptive_time:
-                self._programmer_time = elapsed
-        except Exception as e:
-            # Note: Currently, running the fake xilinx will raise this exception when
-            # trying to do a CleanInputs, for which apparently serial is needed.
-            self._current_state = STATE_FAILED
-            log.log(HWBExperiment, log.level.Warning, "Error programming file: " + str(e))
-            log.log_exc(HWBExperiment, log.level.Warning)
-
-    def _program_file(self, file_content):
-        try:
-            fd, file_name = tempfile.mkstemp(prefix='ud_xilinx_experiment_program',
-                                             suffix='.' + self._programmer.get_suffix())  # Originally the Programmer wasn't the one to contain the suffix info.
-
-            if DEBUG:
-                print "[DBG]: 2"
-                df2 = open("/tmp/orig_content", "w")
-                df2.write("---begin---\n")
-                df2.write(file_content)
-                df2.close()
-
-                # For debugging purposes write the file to tmp
-                df = open("/tmp/toprogram_dbg", "w")
-            try:
-                try:
-                    # TODO: encode? utf8?
-                    if isinstance(file_content, unicode):
-                        if DEBUG: print "[DBG]: Encoding file content in utf8"
-                        file_content_encoded = file_content.encode('utf8')
-                    else:
-                        if DEBUG: print "[DBG]: Not encoding file content"
-                        file_content_encoded = file_content
-                    file_content_recovered = ExperimentUtil.deserialize(file_content_encoded)
-                    os.write(fd, file_content_recovered)
-                    if DEBUG:
-                        df.write(file_content_recovered)
-                finally:
-                    os.close(fd)
-
-                self._programmer.program(file_name)
-            finally:
-                os.remove(file_name)
-                # print file_name
-                # import sys
-                # sys.stdout.flush()
-        except Exception as e:
-
-            if DEBUG:
-                tb = traceback.format_exc()
-                print "FULL EXCEPTION IS: {0}".format(tb)
-
-            # TODO: test me
-            log.log(HWBExperiment, log.level.Info,
-                    "Exception joining sending program to device: %s" % e.args[0])
-            log.log_exc(HWBExperiment, log.level.Debug)
-            raise ExperimentErrors.SendingFileFailureError("Error sending file to device: %s" % e)
-
-        self._clear()
 
     def _clear(self):
         try:
