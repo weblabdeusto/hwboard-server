@@ -1,13 +1,24 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+#
+# Copyright (C) 2005 onwards University of Deusto
+# All rights reserved.
+#
+# This software is licensed as described in the file COPYING, which
+# you should have received as part of this distribution.
+#
+# This software consists of contributions made by many individuals,
+# listed below:
+#
+# Author: Luis Rodriguez <luis.rodriguezgil@deusto.es>
+#
+
+
 import os
 import tempfile
-
+import threading
 import time
 import traceback
-
-import threading
-
-from voodoo.log import logged
-from voodoo.threaded import threaded
 
 
 class ProgrammerError(Exception):
@@ -44,6 +55,7 @@ class Programmer(object):
 
     def __init__(self, debug=False):
         self._debug = debug
+        self._thread = None
         self._thread_active = False
         self._success_callback = None
         self._error_callback = None
@@ -54,6 +66,15 @@ class Programmer(object):
         :return:
         """
         return self._thread_active
+
+    def wait(self):
+        """
+        Waits until the programming process ends and the thread exits.
+        :return:
+        """
+        if self._thread is not None:
+            self._thread.join()
+
 
     def program_file(self, file_content, success_callback, error_callback):
         """

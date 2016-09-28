@@ -40,6 +40,7 @@ import watertank_simulation
 from voodoo.threaded import threaded
 
 from exc import DeviceServerError
+from programmer import Programmer
 
 """
 Notes on the LEDS & SWITCHES
@@ -129,6 +130,9 @@ class HWBExperiment(Experiment.Experiment):
 
         self._board_type = self._cfg_manager.get_value(CFG_HARDWARE_BOARD_TYPE, "")  # Read the board type: IE: FPGA
 
+        # Initialize the Programmer
+        self._programmer = Programmer()
+
         # Debugging and testing related attributes
         global DEBUG
         DEBUG = self._cfg_manager.get_value(CFG_DEBUG_FLAG, DEBUG)
@@ -141,9 +145,6 @@ class HWBExperiment(Experiment.Experiment):
 
         self._programming_thread = None
         self._current_state = STATE_NOT_READY
-        self._programmer_time = self._cfg_manager.get_value('xilinx_programmer_time', "25")  # Seconds
-        self._synthesizer_time = self._cfg_manager.get_value('xilinx_synthesizer_time', "90")  # Seconds
-        self._adaptive_time = self._cfg_manager.get_value('xilinx_adaptive_time', True)
         self._switches_reversed = self._cfg_manager.get_value('switches_reversed', False)  # Seconds
         self._max_use_time = self._cfg_manager.get_value('xilinx_max_use_time', 0)
 
@@ -200,87 +201,29 @@ class HWBExperiment(Experiment.Experiment):
         # Reset the tracked state
         self._switches_state = list("0000000000")
 
-        # TODO:
-        # We will distinguish the file type according to its size.
-        # This is an extremely bad method, which should be changed in the
-        # future. Currently we assume that if the file length is small,
-        # then it's a VHDL file rather than a BITSTREAM. Explicit UCF
-        # is not yet supported.
         extension = file_info
         if extension == "vhd":
-            try:
-                if self._vhd_allowed == False:
-                    self._current_state = STATE_NOT_ALLOWED
-                    return "STATE=" + STATE_NOT_ALLOWED
-                if DEBUG: print "[DBG]: File received: Info: " + file_info
-                self._handle_vhd_file(file_content, file_info)
-                return "STATE=" + STATE_SYNTHESIZING
-            except Exception as ex:
-                if DEBUG: print "EXCEPTION: " + ex
-                raise ex
+            # VHD is not allowed anymore, because this version of the experiment server assumes that
+            # a "compilator" server receives and synthesizes the VHDL.
+            self._current_state = STATE_NOT_ALLOWED
+            return "STATE=" + STATE_NOT_ALLOWED
+
         else:  # We assume, a .bit file.
-            if not self._bit_allowed:
+            # Check that we are not already programming.
+            if self._programmer.is_programming():
+                # TODO: Verify this state is valid for this response.
                 self._current_state = STATE_NOT_ALLOWED
                 return "STATE=" + STATE_NOT_ALLOWED
-            self._programming_thread = self._program_file_t(file_content)
-            return "STATE=" + STATE_PROGRAMMING
-
-    def _handle_ucf_file(self, file_content, file_info):
-        print os.getcwd()
-        c = Compiler(self._compiling_files_path)
-        content = base64.b64decode(file_content)
-        c.feed_ucf(content)
-
-    def _handle_vhd_file(self, file_content, file_info):
-        if DEBUG: print "[DBG] In _handle_vhd_file. Info is " + file_info
-        self._compile_program_file_t(file_content)
-
-    @threaded()
-    @logged("info", except_for='file_content')
-    def _compile_program_file_t(self, file_content):
-        """
-        Running in its own thread, this method will compile the provided
-        VHDL code and then program the board if the result is successful.
-        """
-        self._current_state = STATE_SYNTHESIZING
-        c = Compiler(self._compiling_files_path, self._compiling_tools_path, self._board_type.lower())
-        # c.DEBUG = True
-        content = base64.b64decode(file_content)
-
-        done_already = c.is_same_as_last(content)
-
-        if not done_already:
-            if self._board_type.lower() == "fpga":
-                # TODO: This is quite ugly. We make sure the Compilar class replaces some string to make the
-                # UCF / augmented reality works.
-                c.feed_vhdl(content, True, False)
             else:
-                c.feed_vhdl(content, False, False)
-            if DEBUG: print "[DBG]: VHDL fed. Now compiling."
-            success = c.compileit()
+                self._programmer.program_file(file_content, self._on_programming_success, self._on_programming_error)
+                self._current_state = STATE_PROGRAMMING
+                return "STATE=" + STATE_PROGRAMMING
 
-        else:
-            if DEBUG: print "[DBG]: VHDL is already available. Reusing."
-            success = c.get_last_result()
+    def _on_programming_success(self):
+        self._current_state = STATE_READY
 
-            # TODO: Fix this. Wrong work-around around a bug, so that it works during
-            # controlled circumstances.
-            # if success is None: success = True
-
-        if success is not None and not success:
-            self._current_state = STATE_SYNTHESIZING_ERROR
-            self._compiling_result = c.errors()
-        else:
-            # If we are using adaptive timing, modify it according to this last input.
-            # TODO: Consider limiting the allowed range of variation, in order to dampen potential anomalies.
-            elapsed = c.get_time_elapsed()
-            if (self._adaptive_time):
-                self._programmer_time = elapsed
-
-            targetfile = c.retrieve_targetfile()
-            if DEBUG: print "[DBG]: Target file retrieved after successful compile. Now programming."
-            c._compiling_result = "Synthesizing done."
-            self._program_file_t(targetfile)
+    def _on_programming_error(self, exception):
+        self._current_state = STATE_PROGRAMMING
 
     def _clear(self):
         try:
@@ -303,10 +246,8 @@ class HWBExperiment(Experiment.Experiment):
         """
         self._use_time_start = None  # Ensure that the time gets reset.
 
-        if self._programming_thread is not None:
-            self._programming_thread.join()
-            # Cleaning references
-            self._programming_thread = None
+        if self._programmer is not None:
+            self._programmer.wait()
 
         if self._watertank is not None:
             # In case it is running.
@@ -473,15 +414,10 @@ class HWBExperiment(Experiment.Experiment):
 
                     return self._virtual_world_state
 
-                return "{}";
+                return "{}"
 
             elif command == 'HELP':
-                return "VIRTUALWORLD_MODE | VIRTUALWORLD_STATE | SYNTHESIZING_RESULT | READ_LEDS | REPORT_SWITCHES | REPORT_USE_TIME_LEFT | STATE | ChangeSwitch"
-
-            elif command == 'SYNTHESIZING_RESULT':
-                if (DEBUG):
-                    print "[DBG]: SYNTHESIZING_RESULT: " + self._compiling_result
-                return self._compiling_result
+                return "VIRTUALWORLD_MODE | VIRTUALWORLD_STATE | READ_LEDS | REPORT_SWITCHES | REPORT_USE_TIME_LEFT | STATE | ChangeSwitch"
 
             elif command == 'READ_LEDS':
                 try:
