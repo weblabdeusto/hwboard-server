@@ -4,6 +4,8 @@ import tempfile
 import time
 import traceback
 
+import threading
+
 from voodoo.log import logged
 from voodoo.threaded import threaded
 
@@ -76,7 +78,8 @@ class Programmer(object):
         self._error_callback = error_callback
 
         # This will start the thread and handle everything for this programming process from then on.
-        self._program_file_t(file_content)
+        self._thread = threading.Thread(target=self._program_file_t, group=None, args=(file_content,))
+        self._thread.start()
 
     def _program_file_impl(self, file_content):
         """
@@ -135,15 +138,15 @@ class Programmer(object):
 
             raise ex
 
-    @threaded()
-    @logged("info", except_for='file_content')
     def _program_file_t(self, file_content):
         """
         Running in its own thread, this method will program the board and report success or failure through
         the callbacks that were provided during the program_board invocation.
         """
+
         try:
             start_time = time.time()  # To track the time it takes
+
             self._program_file_impl(file_content)
             elapsed = time.time() - start_time  # Calculate the time the programming process took
 
@@ -154,7 +157,7 @@ class Programmer(object):
 
         except Exception as ex:
 
-            prf = ProgrammingFailed(ex)
+            prf = ProgrammingFailed("Programming exception", ex)
             self._error_callback(prf)
 
         self._thread_active = False
