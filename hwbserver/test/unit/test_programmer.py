@@ -2,7 +2,7 @@ import unittest
 from mock import patch
 import time
 
-from programmer import Programmer
+from hwbserver.programmer import Programmer
 
 
 def program_file_instant(self, content):
